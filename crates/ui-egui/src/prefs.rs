@@ -19,8 +19,14 @@ use crate::viewport::NavMode;
 
 pub const UNITS: [&str; 5] = ["mm", "cm", "m", "in", "ft"];
 /// Mouse mappings: (id, label).
-pub const NAV_PRESETS: [(&str, &str); 5] =
-    [("fusion", "Fusion"), ("solidworks", "SolidWorks"), ("inventor", "Inventor"), ("alias", "Alias"), ("tinkercad", "Tinkercad")];
+pub const NAV_PRESETS: [(&str, &str); 6] = [
+    ("fusion", "Fusion"),
+    ("solidworks", "SolidWorks"),
+    ("inventor", "Inventor"),
+    ("alias", "Alias"),
+    ("tinkercad", "Tinkercad"),
+    ("openscad", "OpenSCAD"),
+];
 /// The dialog's pages, in order.
 pub const PAGES: [&str; 7] = ["General", "Navigation", "Keyboard Shortcuts", "Design", "Graphics", "Sketch", "Selection"];
 pub const PAGE_SHORTCUTS: usize = 2;
@@ -240,6 +246,9 @@ pub fn set_autosave(app: &mut SolveApp) {
 
 /// Which navigation a mouse drag does under the preset.
 pub fn nav_mode(app: &SolveApp, middle: bool, secondary: bool, mods: Modifiers) -> Option<NavMode> {
+    if app.preferences.nav == "openscad" && (middle || secondary) {
+        return Some(if mods.shift { NavMode::Zoom } else { NavMode::Pan });
+    }
     if secondary && !middle {
         // Tinkercad: Shift+right pans; everywhere else right drag orbits.
         return Some(if app.preferences.nav == "tinkercad" && mods.shift { NavMode::Pan } else { NavMode::Orbit });
@@ -554,7 +563,8 @@ fn page(app: &mut SolveApp, ui: &mut egui::Ui, t: &Tokens) {
                     }
                 });
             ui.end_row();
-            note(ui, &format!("{}; hold Shift during orbit to snap; the wheel zooms", nav_help(&app.preferences.nav)));
+            let snap_help = if app.preferences.nav == "openscad" { "" } else { "; hold Shift during orbit to snap" };
+            note(ui, &format!("{}{snap_help}; the wheel zooms", nav_help(&app.preferences.nav)));
             ui.label("Reverse zoom direction");
             ui.checkbox(&mut app.preferences.zoom_reverse, "");
             ui.end_row();
@@ -648,6 +658,7 @@ pub fn nav_help(preset: &str) -> &'static str {
         "inventor" => "Middle drag pans, Shift+middle orbits, Ctrl+middle zooms, right drag orbits",
         "alias" => "Alt+right or right drag orbits, middle drag pans, Ctrl+middle zooms",
         "tinkercad" => "Right drag orbits, middle or Shift+right drag pans",
+        "openscad" => "Left drag orbits, right or middle drag pans, Shift+right or Shift+middle drag zooms",
         _ => "Middle drag pans, Shift+middle orbits, right drag orbits",
     }
 }
@@ -705,7 +716,7 @@ pub fn set(app: &mut SolveApp, p: &serde_json::Value) -> Result<serde_json::Valu
         return Err(format!("units must be one of {}", UNITS.join(", ")));
     }
     if !NAV_PRESETS.iter().any(|(id, _)| *id == new.nav) || !MSAA.contains(&new.msaa) {
-        return Err("`nav` must be fusion, solidworks, inventor, alias or tinkercad and `msaa` 1, 2, 4 or 8".into());
+        return Err("`nav` must be fusion, solidworks, inventor, alias, tinkercad or openscad and `msaa` 1, 2, 4 or 8".into());
     }
     if !THEMES.iter().any(|(id, _)| *id == new.theme) || !["z", "y"].contains(&new.up_axis.as_str()) {
         return Err("`theme` must be dark, light or system and `up_axis` z or y".into());
@@ -734,6 +745,20 @@ pub fn set(app: &mut SolveApp, p: &serde_json::Value) -> Result<serde_json::Valu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn openscad_preset_maps_navigation_and_persists() {
+        let mut app = SolveApp::new(solvecraft_engine::Session::default(), Default::default());
+        set(&mut app, &json!({"nav": "openscad"})).unwrap();
+        for (middle, secondary) in [(true, false), (false, true)] {
+            assert!(matches!(nav_mode(&app, middle, secondary, Modifiers::default()), Some(NavMode::Pan)));
+            assert!(matches!(nav_mode(&app, middle, secondary, Modifiers { shift: true, ..Default::default() }), Some(NavMode::Zoom)));
+        }
+        assert!(nav_mode(&app, false, false, Modifiers::default()).is_none());
+        let mut other = SolveApp::new(solvecraft_engine::Session::default(), Default::default());
+        other.load_prefs(&app.prefs());
+        assert_eq!(other.preferences.nav, "openscad");
+    }
 
     #[test]
     fn presets_map_the_mouse_and_prefs_round_trip() {
